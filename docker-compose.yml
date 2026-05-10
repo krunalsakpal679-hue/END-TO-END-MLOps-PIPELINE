@@ -1,0 +1,160 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mlflow} -d $${POSTGRES_DB:-mlflow_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mlops-backend
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    env_file: .env
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mlops-backend
+
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file: .env
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add myminio http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      /usr/bin/mc mb myminio/mlops-artifacts --ignore-existing;
+      /usr/bin/mc anonymous set public myminio/mlops-artifacts;
+      exit 0;
+      "
+    networks:
+      - mlops-backend
+
+  mlflow-server:
+    image: python:3.11-slim
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+    command: >
+      /bin/sh -c "
+      pip install mlflow psycopg2-binary boto3 cryptography &&
+      mlflow server --backend-store-uri postgresql://$${POSTGRES_USER:-mlflow}:$${POSTGRES_PASSWORD:-mlflow}@postgres:5432/$${POSTGRES_DB:-mlflow_db} --default-artifact-root s3://mlops-artifacts --host 0.0.0.0 --port 5000 --allowed-hosts mlflow-server,mlflow-server:5000,localhost,127.0.0.1
+      "
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mlops-backend
+
+  api:
+    build: .
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    env_file: .env
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mlops-backend
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mlops-frontend
+      - mlops-backend
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mlops-backend
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mlops-frontend
+      - mlops-backend
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  mlops-frontend:
+  mlops-backend:
