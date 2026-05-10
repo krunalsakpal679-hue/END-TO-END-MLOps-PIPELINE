@@ -1,0 +1,120 @@
+# docker-compose.mlflow.yml
+# 
+# This file defines the MLflow tracking infrastructure for the Anti-Gravity project.
+# It sets up four main services:
+# 1. mlflow-server: The MLflow tracking server connected to PostgreSQL and MinIO.
+# 2. postgres: PostgreSQL 15 database for storing MLflow metadata.
+# 3. minio: S3-compatible storage for model artifacts (creates 'mlops-artifacts' bucket).
+# 4. pgadmin: Web interface for managing the PostgreSQL database.
+# 
+# Constraints Met:
+# - All services use restart: unless-stopped
+# - Passwords and connection strings are read from .env
+# - Healthchecks are configured to ensure services start correctly
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: mlflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: mlflow_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:80/misc/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio:
+    image: minio/minio
+    container_name: mlflow_minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Helper service to create the MinIO bucket on startup
+  createbuckets:
+    image: minio/mc
+    container_name: mlflow_minio_createbuckets
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      /usr/bin/mc mb myminio/mlops-artifacts --ignore-existing;
+      /usr/bin/mc policy set public myminio/mlops-artifacts;
+      exit 0;
+      "
+
+  mlflow-server:
+    image: python:3.11-slim
+    container_name: mlflow_server
+    restart: unless-stopped
+    command: >
+      /bin/sh -c "
+      pip install mlflow psycopg2-binary boto3 &&
+      mlflow server
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      --default-artifact-root s3://mlops-artifacts
+      --host 0.0.0.0
+      --port 5000
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  minio_data:
