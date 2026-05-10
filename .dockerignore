@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+tests/
+*.md
+data/
+mlruns/
+.env
+.env.*
+*.log
+.pytest_cache
+.mypy_cache
+feedback_log.jsonl
+test_mlruns/
