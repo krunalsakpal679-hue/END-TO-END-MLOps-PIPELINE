@@ -1,0 +1,9 @@
+# Known unfixable Debian base image vulnerabilities (Portfolio bypass)
+# These are OS-level issues with no upstream patch available.
+# We ignore them to keep the CI green while monitoring them via the Security tab.
+
+# gnutls: Denial of Service via DTLS zero-length fragment
+CVE-2026-33845
+
+# libssh2: integer overflow via large username or password arguments
+CVE-2026-7598
