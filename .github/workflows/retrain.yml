@@ -1,0 +1,211 @@
+name: Scheduled Model Retraining
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      trigger_reason:
+        description: 'Reason for triggering retraining'
+        required: false
+        default: 'scheduled_weekly'
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  retrain:
+    name: Retrain Model
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # ────────────────────────────────────────
+      # Step 1 — Setup
+      # ────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-retrain-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-retrain-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ────────────────────────────────────────
+      # Step 2 — Pull latest data with DVC
+      # ────────────────────────────────────────
+      - name: Skip DVC remote credentials
+        run: |
+          echo "DVC remote storage not configured (Portfolio mode)"
+          echo "Skipping credential setup"
+          echo "dvc_available=false" >> "$GITHUB_OUTPUT"
+
+      - name: Pull latest training data
+        if: false
+        run: dvc pull
+
+      # ────────────────────────────────────────
+      # Step 3 — Run retraining pipeline
+      # ────────────────────────────────────────
+      - name: Determine trigger reason
+        id: reason
+        run: |
+          REASON="${{ inputs.trigger_reason || 'scheduled_weekly' }}"
+          echo "trigger_reason=${REASON}" >> "$GITHUB_OUTPUT"
+
+      - name: Run retraining pipeline
+        id: retrain
+        run: |
+          python retrain_pipeline.py --trigger-reason "${{ steps.reason.outputs.trigger_reason }}"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # ────────────────────────────────────────
+      # Step 4 — Parse results
+      # ────────────────────────────────────────
+      - name: Parse retrain_summary.json
+        id: results
+        run: |
+          python -c "
+          import json, os
+
+          with open('retrain_summary.json', 'r') as f:
+              summary = json.load(f)
+
+          promoted = str(summary.get('promoted', False)).lower()
+          champion_f1 = str(summary.get('champion_f1', 0.0))
+          challenger_f1 = str(summary.get('challenger_f1', 0.0))
+          trigger = summary.get('trigger_reason', 'unknown')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+              gh.write(f'promoted={promoted}\n')
+              gh.write(f'champion_f1={champion_f1}\n')
+              gh.write(f'challenger_f1={challenger_f1}\n')
+              gh.write(f'trigger_reason={trigger}\n')
+          "
+
+      # ────────────────────────────────────────
+      # Step 5a — If promoted: Open a Pull Request
+      # ────────────────────────────────────────
+      - name: Create retrain branch and PR
+        if: steps.results.outputs.promoted == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
+          BRANCH="retrain/auto-${TIMESTAMP}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "${BRANCH}"
+
+          # Generate updated model card
+          mkdir -p docs
+          cat > docs/model_card.md << 'CARD_EOF'
+          # Model Card — Binary Classifier
+
+          ## Latest Retraining Summary
+
+          | Metric          | Value                                              |
+          |-----------------|-----------------------------------------------------|
+          | Champion F1     | ${{ steps.results.outputs.champion_f1 }}            |
+          | Challenger F1   | ${{ steps.results.outputs.challenger_f1 }}           |
+          | Trigger Reason  | ${{ steps.results.outputs.trigger_reason }}           |
+          | Timestamp       | $(date -u +"%Y-%m-%d %H:%M:%S UTC")                 |
+          | Promoted        | Yes                                                  |
+
+          ## Decision
+
+          The challenger model exceeded the champion by the required margin (>0.01 F1)
+          and passed the McNemar statistical significance test (p < 0.05).
+          The new model has been promoted to production.
+          CARD_EOF
+
+          git add docs/model_card.md retrain_summary.json
+          git commit -m "chore: update model card after automated retraining [${TIMESTAMP}]"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --title "chore: automated model retrain — challenger promoted [${TIMESTAMP}]" \
+            --body "## Automated Retraining Results
+
+          | Metric | Value |
+          |--------|-------|
+          | Champion F1 | ${{ steps.results.outputs.champion_f1 }} |
+          | Challenger F1 | ${{ steps.results.outputs.challenger_f1 }} |
+          | Trigger Reason | ${{ steps.results.outputs.trigger_reason }} |
+          | Timestamp | $(date -u +'%Y-%m-%d %H:%M:%S UTC') |
+          | Decision | **Promoted** |
+
+          This PR was created automatically by the retraining pipeline." \
+            --base main \
+            --head "${BRANCH}" \
+            --label "automated-retrain"
+
+      # ────────────────────────────────────────
+      # Step 5b — If not promoted: Create Issue
+      # ────────────────────────────────────────
+      - name: Create GitHub Issue (not promoted)
+        if: steps.results.outputs.promoted == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+
+          gh issue create \
+            --title "Model retraining did not improve performance - ${TODAY}" \
+            --body "## Retraining Summary
+
+          | Metric | Value |
+          |--------|-------|
+          | Champion F1 | ${{ steps.results.outputs.champion_f1 }} |
+          | Challenger F1 | ${{ steps.results.outputs.challenger_f1 }} |
+          | Trigger Reason | ${{ steps.results.outputs.trigger_reason }} |
+          | Date | ${TODAY} |
+          | Decision | **Not promoted** |
+
+          ## Action Items
+
+          - [ ] Check training data quality
+          - [ ] Review hyperparameter search
+          - [ ] Check for data drift
+          - [ ] Manual review needed" \
+            --label "model-performance"
+
+      # ────────────────────────────────────────
+      # Step 6 — Post to workflow summary
+      # ────────────────────────────────────────
+      - name: Write workflow summary
+        run: |
+          echo "## Model Retraining Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Champion F1 | ${{ steps.results.outputs.champion_f1 }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Challenger F1 | ${{ steps.results.outputs.challenger_f1 }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trigger Reason | ${{ steps.results.outputs.trigger_reason }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Promoted | ${{ steps.results.outputs.promoted }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Timestamp | $(date -u +'%Y-%m-%d %H:%M:%S UTC') |" >> "$GITHUB_STEP_SUMMARY"
+
+      # ────────────────────────────────────────
+      # Step 7 — Notify Slack
+      # ────────────────────────────────────────
+      - name: Skip Slack notifications
+        if: always()
+        run: |
+          echo "Slack integration disabled (Portfolio mode)"
