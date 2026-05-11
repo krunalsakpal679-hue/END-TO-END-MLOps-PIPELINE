@@ -1,0 +1,260 @@
+name: PR Quality Gates
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+      - "release/**"
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1 — Lint (ruff, black, isort)
+  # ──────────────────────────────────────────────
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+
+      - name: Install linters
+        run: pip install ruff black isort
+
+      - name: Run ruff (code errors & style)
+        run: ruff check src/ app/
+
+      - name: Run black (formatting check)
+        run: black --check src/ app/
+
+      - name: Run isort (import ordering)
+        run: isort --check-only src/ app/
+
+  # ──────────────────────────────────────────────
+  # Job 2 — Type Check (mypy)
+  # ──────────────────────────────────────────────
+  type_check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-typecheck-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-typecheck-
+
+      - name: Install mypy and type stubs
+        run: |
+          pip install -r requirements.txt
+          pip install mypy types-requests types-PyYAML
+
+      - name: Run mypy (strict mode)
+        run: mypy --strict app/ src/
+
+  # ──────────────────────────────────────────────
+  # Job 3 — Unit Tests (matrix: 3.10 + 3.11)
+  # ──────────────────────────────────────────────
+  unit_tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests with coverage
+        run: pytest tests/unit/ --cov=app --cov=src --cov-report=xml --cov-fail-under=80
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ──────────────────────────────────────────────
+  # Job 4 — Integration Tests (after unit-tests)
+  # ──────────────────────────────────────────────
+  integration_tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [unit_tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-integration-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-integration-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start test Docker Compose stack
+        run: docker compose -f docker-compose.test.yml up -d
+
+      - name: Wait for services to be ready
+        run: sleep 30
+
+      - name: Run integration tests
+        run: pytest tests/integration/ --timeout=120
+
+      - name: Stop Docker Compose stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+  # ──────────────────────────────────────────────
+  # Job 5 — Security Scan (bandit + safety)
+  # ──────────────────────────────────────────────
+  security_scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-security-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-security-
+
+      - name: Install security tools
+        run: |
+          pip install -r requirements.txt
+          pip install bandit safety
+
+      - name: Run bandit (code security analysis)
+        run: bandit -r src/ app/ -ll
+
+      - name: Run safety (dependency CVE check)
+        run: safety check --full-report
+
+  # ──────────────────────────────────────────────
+  # Job 6 — Model Validation (MLflow registry)
+  # ──────────────────────────────────────────────
+  model_validation:
+    name: Model Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-model-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-model-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate production model
+        env:
+          MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+        run: |
+          python -c "
+          import json
+          import numpy as np
+
+          # --- Load validation samples ---
+          with open('tests/fixtures/validation_samples.json', 'r') as f:
+              data = json.load(f)
+
+          X_test = np.array(data['features'])
+          y_test = np.array(data['labels'])
+
+          # --- Load production model ---
+          try:
+              import mlflow
+              model = mlflow.pyfunc.load_model('models:/binary_classifier/Production')
+          except Exception:
+              import joblib
+              model = joblib.load('models/champion_model.pkl')
+
+          # --- Predict & compute F1 ---
+          y_pred = model.predict(X_test)
+          y_pred = (np.array(y_pred) >= 0.5).astype(int) if y_pred.dtype == float else np.array(y_pred)
+
+          tp = np.sum((y_pred == 1) & (y_test == 1))
+          fp = np.sum((y_pred == 1) & (y_test == 0))
+          fn = np.sum((y_pred == 0) & (y_test == 1))
+          precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+          recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+          f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+          print(f'F1 Score: {f1:.4f}')
+          assert f1 >= 0.83, f'Model F1 ({f1:.4f}) is below threshold 0.83'
+          print('Model validation PASSED')
+          "

@@ -1,0 +1,287 @@
+name: Dependency Security Audit
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1 — Python dependency vulnerability scan
+  # ──────────────────────────────────────────────
+  python_audit:
+    name: Python Dependency Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies and audit tools
+        run: |
+          pip install -r requirements.txt
+          pip install pip-audit safety
+
+      - name: Run pip-audit
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          pip-audit --format=json --output=pip_audit_results.json || true
+          pip-audit --format=columns 2>&1 | tee pip_audit_output.txt || true
+
+          # Check for HIGH or CRITICAL
+          VULN_COUNT=$(python -c "
+          import json
+          try:
+              with open('pip_audit_results.json') as f:
+                  data = json.load(f)
+              vulns = [v for v in data if v.get('vulns')]
+              print(len(vulns))
+          except Exception:
+              print(0)
+          ")
+          echo "vuln_count=${VULN_COUNT}" >> "$GITHUB_OUTPUT"
+
+      - name: Run safety check
+        id: safety_check
+        continue-on-error: true
+        run: |
+          safety check --full-report 2>&1 | tee safety_output.txt
+          echo "safety_exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Issue if vulnerabilities found
+        if: steps.pip_audit.outputs.vuln_count != '0' || steps.safety_check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+
+          # Build vulnerability table from pip-audit results
+          TABLE=$(python -c "
+          import json
+
+          try:
+              with open('pip_audit_results.json') as f:
+                  data = json.load(f)
+          except Exception:
+              data = []
+
+          lines = []
+          for pkg in data:
+              name = pkg.get('name', 'unknown')
+              version = pkg.get('version', 'unknown')
+              for vuln in pkg.get('vulns', []):
+                  cve = vuln.get('id', 'N/A')
+                  fix = vuln.get('fix_versions', ['N/A'])
+                  fix_str = ', '.join(fix) if isinstance(fix, list) else str(fix)
+                  severity = vuln.get('aliases', ['unknown'])
+                  sev_str = ', '.join(severity) if isinstance(severity, list) else 'unknown'
+                  lines.append(f'| {name} | {cve} | {sev_str} | {version} | {fix_str} |')
+
+          if lines:
+              print('\n'.join(lines))
+          else:
+              print('| (see safety report below) | - | - | - | - |')
+          ")
+
+          BODY="## Vulnerable Python Dependencies Found
+
+          **Scan Date:** ${TODAY}
+          **Triggered by:** ${{ github.event_name }}
+
+          ### Vulnerability Details
+
+          | Package | CVE ID | Severity | Current Version | Fixed Version |
+          |---------|--------|----------|-----------------|---------------|
+          ${TABLE}
+
+          ### Safety Report
+
+          \`\`\`
+          $(cat safety_output.txt | head -100)
+          \`\`\`
+
+          ### Action Required
+
+          - [ ] Review each vulnerability
+          - [ ] Update affected packages
+          - [ ] Re-run security audit
+          - [ ] Verify no breaking changes after updates"
+
+          gh issue create \
+            --title "Security: Vulnerable Python dependencies found - ${TODAY}" \
+            --body "${BODY}" \
+            --label "security" \
+            --label "dependency"
+
+  # ──────────────────────────────────────────────
+  # Job 2 — Base Docker image patch check
+  # ──────────────────────────────────────────────
+  base_image_check:
+    name: Base Image Patch Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pull latest python:3.11-slim and get digest
+        id: digest
+        run: |
+          docker pull python:3.11-slim
+          NEW_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim | cut -d'@' -f2)
+          echo "new_digest=${NEW_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "New digest: ${NEW_DIGEST}"
+
+          # Get current digest from Dockerfile
+          if grep -q 'python:3.11-slim@sha256' Dockerfile 2>/dev/null; then
+            CURRENT_DIGEST=$(grep 'python:3.11-slim@sha256' Dockerfile | head -1 | grep -oP 'sha256:[a-f0-9]+')
+            echo "current_digest=${CURRENT_DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "Current digest: ${CURRENT_DIGEST}"
+          else
+            echo "current_digest=none" >> "$GITHUB_OUTPUT"
+            echo "No pinned digest found in Dockerfile"
+          fi
+
+      - name: Check if base image was updated
+        id: compare
+        run: |
+          if [ "${{ steps.digest.outputs.new_digest }}" != "${{ steps.digest.outputs.current_digest }}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Base image has been updated upstream"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Base image is up to date"
+          fi
+
+      - name: Update Dockerfile and open PR
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+          BRANCH="deps/update-base-image-${TODAY}"
+          NEW_DIGEST="${{ steps.digest.outputs.new_digest }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "${BRANCH}"
+
+          # Update FROM line in Dockerfile to pin new digest
+          if grep -q 'python:3.11-slim@sha256' Dockerfile; then
+            sed -i "s|python:3.11-slim@sha256:[a-f0-9]*|python:3.11-slim@${NEW_DIGEST}|g" Dockerfile
+          else
+            sed -i "s|python:3.11-slim|python:3.11-slim@${NEW_DIGEST}|g" Dockerfile
+          fi
+
+          git add Dockerfile
+          git commit -m "chore: update base Docker image to latest patch [${TODAY}]"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --title "chore: update base Docker image to latest patch" \
+            --body "## Base Image Update
+
+          The upstream \`python:3.11-slim\` image has been updated with security patches.
+
+          | Detail | Value |
+          |--------|-------|
+          | Previous Digest | \`${{ steps.digest.outputs.current_digest }}\` |
+          | New Digest | \`${NEW_DIGEST}\` |
+          | Date | ${TODAY} |
+
+          This PR pins the Dockerfile to the latest patched digest.
+
+          ### Checklist
+          - [ ] CI checks pass
+          - [ ] No breaking changes from base image update
+          - [ ] Approve and merge" \
+            --base main \
+            --head "${BRANCH}" \
+            --label "security" \
+            --label "dependency"
+
+  # ──────────────────────────────────────────────
+  # Job 3 — License compliance check
+  # ──────────────────────────────────────────────
+  license_check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies and license tool
+        run: |
+          pip install -r requirements.txt
+          pip install pip-licenses
+
+      - name: Generate license report
+        run: |
+          pip-licenses --format=json --output-file=licenses.json
+          pip-licenses --format=table | tee licenses_table.txt
+          echo "License report generated"
+
+      - name: Check for copyleft licenses
+        id: copyleft
+        run: |
+          python -c "
+          import json, sys
+
+          with open('licenses.json') as f:
+              packages = json.load(f)
+
+          copyleft_keywords = ['GPL', 'AGPL', 'LGPL']
+          violations = []
+
+          for pkg in packages:
+              license_name = pkg.get('License', '')
+              for keyword in copyleft_keywords:
+                  if keyword in license_name.upper():
+                      violations.append({
+                          'name': pkg.get('Name', 'unknown'),
+                          'version': pkg.get('Version', 'unknown'),
+                          'license': license_name
+                      })
+                      break
+
+          if violations:
+              print('::error::Copyleft license violations detected!')
+              print()
+              print('| Package | Version | License |')
+              print('|---------|---------|---------|')
+              for v in violations:
+                  print(f'| {v[\"name\"]} | {v[\"version\"]} | {v[\"license\"]} |')
+              print()
+              print(f'Total violations: {len(violations)}')
+              sys.exit(1)
+          else:
+              print('No copyleft license violations found.')
+          "
+
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: licenses.json
+          retention-days: 90

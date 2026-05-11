@@ -1,0 +1,264 @@
+name: Model Performance Regression Gate
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+        description: 'Docker image tag to validate'
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  model_gate_check:
+    name: Model Performance Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-gate-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-gate-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ────────────────────────────────────────
+      # Steps 1-5 — Load, Evaluate, Gate, Write, Annotate
+      # ────────────────────────────────────────
+      - name: Run model performance gate
+        id: gate
+        env:
+          MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+        run: |
+          python -c "
+          import json, time, os
+          import numpy as np
+          import pandas as pd
+
+          # ── Step 1: Load model ──
+          print('Step 1: Loading production model...')
+          model = None
+          try:
+              import mlflow
+              model = mlflow.pyfunc.load_model('models:/binary_classifier/Production')
+              print('  Loaded from MLflow registry')
+          except Exception as e:
+              print(f'  MLflow unavailable ({e}), falling back to local model')
+              try:
+                  import joblib
+                  model = joblib.load('models/champion_model.pkl')
+                  print('  Loaded from local file')
+              except Exception as e2:
+                  print(f'::error::Could not load model: {e2}')
+                  raise SystemExit(1)
+
+          # ── Step 2: Run evaluation ──
+          print('Step 2: Running evaluation on regression test set...')
+          df = pd.read_csv('tests/fixtures/regression_test_set.csv')
+          feature_cols = [c for c in df.columns if c != 'target']
+          X_test = df[feature_cols].values
+          y_test = df['target'].values
+
+          y_pred_raw = model.predict(X_test)
+          y_pred = (np.array(y_pred_raw) >= 0.5).astype(int) if np.issubdtype(np.array(y_pred_raw).dtype, np.floating) else np.array(y_pred_raw)
+
+          # Probabilities for ROC-AUC
+          if hasattr(model, 'predict_proba'):
+              y_prob = model.predict_proba(X_test)
+              y_prob = y_prob[:, 1] if len(y_prob.shape) == 2 else y_prob
+          else:
+              y_prob = np.array(y_pred_raw, dtype=float)
+
+          # F1 weighted
+          labels = np.unique(np.concatenate([y_test, y_pred]))
+          f1s, supports = [], []
+          for lab in labels:
+              tp = np.sum((y_pred == lab) & (y_test == lab))
+              fp = np.sum((y_pred == lab) & (y_test != lab))
+              fn = np.sum((y_pred != lab) & (y_test == lab))
+              sup = np.sum(y_test == lab)
+              p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+              r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+              f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+              f1s.append(f1)
+              supports.append(sup)
+          total = sum(supports)
+          f1_weighted = sum(f * s for f, s in zip(f1s, supports)) / total if total > 0 else 0.0
+
+          # Accuracy
+          accuracy = float(np.mean(y_test == y_pred))
+
+          # ROC-AUC
+          desc_idx = np.argsort(y_prob)[::-1]
+          y_sorted = y_test[desc_idx]
+          tps = np.cumsum(y_sorted)
+          fps = np.cumsum(1 - y_sorted)
+          if tps[-1] > 0 and fps[-1] > 0:
+              tpr = np.concatenate(([0.0], tps / tps[-1]))
+              fpr = np.concatenate(([0.0], fps / fps[-1]))
+              try:
+                  roc_auc = float(np.trapezoid(tpr, fpr))
+              except AttributeError:
+                  roc_auc = float(np.trapz(tpr, fpr))
+          else:
+              roc_auc = 0.5
+
+          # P95 latency (500 predictions)
+          latencies = []
+          sample = X_test[0:1]
+          for _ in range(500):
+              start = time.perf_counter()
+              model.predict(sample)
+              latencies.append((time.perf_counter() - start) * 1000)
+          p95_latency = float(np.percentile(latencies, 95))
+
+          print(f'  F1_weighted: {f1_weighted:.4f}')
+          print(f'  ROC-AUC:     {roc_auc:.4f}')
+          print(f'  Accuracy:    {accuracy:.4f}')
+          print(f'  P95 Latency: {p95_latency:.2f}ms')
+
+          # ── Step 3: Check thresholds ──
+          print('Step 3: Checking thresholds...')
+          thresholds = {
+              'f1_weighted':  {'value': f1_weighted, 'threshold': 0.83, 'op': '>='},
+              'roc_auc':      {'value': roc_auc,     'threshold': 0.90, 'op': '>='},
+              'accuracy':     {'value': accuracy,    'threshold': 0.82, 'op': '>='},
+              'p95_latency_ms': {'value': p95_latency, 'threshold': 200.0, 'op': '<'},
+          }
+
+          results = {}
+          for metric, cfg in thresholds.items():
+              if cfg['op'] == '>=':
+                  passed = cfg['value'] >= cfg['threshold']
+              else:
+                  passed = cfg['value'] < cfg['threshold']
+              results[metric] = {
+                  'value': round(cfg['value'], 4),
+                  'threshold': cfg['threshold'],
+                  'passed': passed
+              }
+
+          overall_passed = all(r['passed'] for r in results.values())
+
+          # ── Step 4: Write gate_results.json ──
+          print('Step 4: Writing gate_results.json...')
+          gate_output = {
+              'image_tag': '${{ inputs.image_tag }}',
+              'overall_passed': overall_passed,
+              'metrics': results
+          }
+          with open('gate_results.json', 'w') as f:
+              json.dump(gate_output, f, indent=2)
+
+          # ── Step 5: GitHub annotations ──
+          print('Step 5: Writing annotations...')
+          friendly = {
+              'f1_weighted': 'F1 Score',
+              'roc_auc': 'ROC-AUC',
+              'accuracy': 'Accuracy',
+              'p95_latency_ms': 'P95 Latency (ms)'
+          }
+          for metric, r in results.items():
+              name = friendly.get(metric, metric)
+              if r['passed']:
+                  print(f'::notice::{name} {r[\"value\"]} meets threshold {r[\"threshold\"]}')
+              else:
+                  print(f'::error::{name} {r[\"value\"]} is below threshold {r[\"threshold\"]}')
+
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+              gh.write(f'overall_passed={str(overall_passed).lower()}\n')
+              gh.write(f'gate_json={json.dumps(gate_output)}\n')
+
+          if not overall_passed:
+              print('::error::Model performance regression detected. Deployment blocked.')
+              raise SystemExit(1)
+          else:
+              print('All thresholds passed. Model is cleared for deployment.')
+          "
+
+      # ────────────────────────────────────────
+      # Step 4b — Upload artifact
+      # ────────────────────────────────────────
+      - name: Upload gate results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-results
+          path: gate_results.json
+          retention-days: 90
+
+      # ────────────────────────────────────────
+      # Step 6 — Comment on PR if failed
+      # ────────────────────────────────────────
+      - name: Comment on PR if gate failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let gateData;
+            try {
+              gateData = JSON.parse(fs.readFileSync('gate_results.json', 'utf8'));
+            } catch (e) {
+              console.log('gate_results.json not found, skipping PR comment');
+              return;
+            }
+
+            const metrics = gateData.metrics;
+            let table = '## :x: Model Performance Gate Failed\n\n';
+            table += '| Metric | Actual | Threshold | Status |\n';
+            table += '|--------|--------|-----------|--------|\n';
+
+            const friendly = {
+              'f1_weighted': 'F1 Score',
+              'roc_auc': 'ROC-AUC',
+              'accuracy': 'Accuracy',
+              'p95_latency_ms': 'P95 Latency (ms)'
+            };
+
+            for (const [key, val] of Object.entries(metrics)) {
+              const name = friendly[key] || key;
+              const status = val.passed ? ':white_check_mark:' : ':x:';
+              table += `| ${name} | ${val.value} | ${val.threshold} | ${status} |\n`;
+            }
+
+            table += `\n**Image:** \`${{ inputs.image_tag }}\`\n`;
+            table += `**Action:** Deployment has been blocked. Please investigate the regression.\n`;
+
+            // Find associated PR
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${context.ref.replace('refs/heads/', '')}`
+            });
+
+            if (prs.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prs.data[0].number,
+                body: table
+              });
+              console.log(`Commented on PR #${prs.data[0].number}`);
+            } else {
+              console.log('No open PR found for this ref, skipping comment');
+            }
