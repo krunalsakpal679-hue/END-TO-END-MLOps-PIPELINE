@@ -1,6 +1,6 @@
 {
-    "trigger_reason": "test",
-    "timestamp": "2026-05-11T12:12:55.890380+00:00",
+    "trigger_reason": "scheduled_weekly",
+    "timestamp": "2026-05-24T06:07:56.856648+00:00",
     "champion_f1": 0.85,
     "challenger_f1": 0.87,
     "promoted": true,
