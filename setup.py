@@ -43,8 +43,9 @@ def main():
 
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
     if not tracking_uri:
-        print("Error: MLFLOW_TRACKING_URI environment variable is not set. Please set it and try again.")
-        sys.exit(1)
+        print("Warning: MLFLOW_TRACKING_URI environment variable is not set. Defaulting to 'sqlite:///mlflow.db'")
+        tracking_uri = "sqlite:///mlflow.db"
+        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
 
     mlflow.set_tracking_uri(tracking_uri)
     experiment_name = "anti_gravity_v1"

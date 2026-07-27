@@ -112,6 +112,8 @@ class ModelChallenger:
         return float(np.percentile(latencies, 95))
 
     def compare(self, champion_model, challenger_model, X_test: np.ndarray, y_test: np.ndarray) -> Dict[str, Any]:
+        X_test = np.asarray(X_test)
+        y_test = np.asarray(y_test)
         
         # 1. Predictions
         champ_pred = champion_model.predict(X_test)

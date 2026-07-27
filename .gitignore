@@ -1,4 +1,30 @@
 .env
 data/
 mlruns/
+test_mlruns/
 *.pyc
+__pycache__/
+.pytest_cache/
+scratch/
+
+# Databases
+*.db
+mlflow.db
+test_mlflow.db
+
+# Logs, Pickles, & Temp Files
+*.log
+*.jsonl
+*.pkl
+calib.png
+roc_pr.png
+test*.csv
+rep.json
+rep.md
+pr_body.md
+algorithms_test_summary.json
+
+# Sensitive Auth Data
+generated_passwords.txt
+.htpasswd
+

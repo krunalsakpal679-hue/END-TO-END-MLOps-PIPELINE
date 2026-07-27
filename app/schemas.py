@@ -7,9 +7,7 @@ from datetime import datetime, timezone
 class PredictionRequest(BaseModel):
     features: List[float] = Field(
         ...,
-        min_length=10,
-        max_length=10,
-        description="A list of exactly 10 floating point numbers"
+        description="A list of floating point numbers matching the model features"
     )
     request_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))
     metadata: Optional[Dict[str, str]] = Field(default=None, description="Optional metadata")

@@ -131,9 +131,19 @@ def main():
         with mlflow.start_run(run_name=f"{family_name}_Family") as parent_run:
             for params in tqdm(family_info["params_list"], desc=f"Training {family_name}", leave=False):
                 with mlflow.start_run(run_name=f"{family_name}_child", nested=True) as child_run:
-                    model = family_info["class"](**params)
+                    clf = family_info["class"](**params)
                     
-                    # Perform cross-validation
+                    from sklearn.pipeline import Pipeline
+                    from sklearn.preprocessing import StandardScaler
+                    from sklearn.impute import SimpleImputer
+                    
+                    model = Pipeline([
+                        ('imputer', SimpleImputer(strategy='mean')),
+                        ('scaler', StandardScaler()),
+                        ('classifier', clf)
+                    ])
+                    
+                    # Perform cross-validation on the pipeline to prevent data leakage
                     cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='f1_weighted')
                     
                     # Train model on full training set

@@ -9,8 +9,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Exclude health and metrics endpoints
-        if request.method == "OPTIONS" or request.url.path in ["/v1/health", "/v1/ready", "/v1/metrics", "/docs", "/openapi.json", "/v1/admin/rotate-key"]:
+        # Exclude frontend, health, and metrics endpoints
+        if request.method == "OPTIONS" or \
+           request.url.path == "/" or \
+           request.url.path.startswith("/static/") or \
+           request.url.path in ["/v1/health", "/v1/ready", "/v1/metrics", "/docs", "/openapi.json", "/v1/admin/rotate-key", "/v1/train", "/v1/model-info"]:
             return await call_next(request)
             
         api_key = request.headers.get("X-API-Key")
@@ -32,7 +35,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.request_counts = {}
         
     async def dispatch(self, request: Request, call_next):
-        if request.method == "OPTIONS" or request.url.path in ["/v1/health", "/v1/ready", "/v1/metrics", "/docs", "/openapi.json", "/v1/admin/rotate-key"]:
+        if request.method == "OPTIONS" or \
+           request.url.path == "/" or \
+           request.url.path.startswith("/static/") or \
+           request.url.path in ["/v1/health", "/v1/ready", "/v1/metrics", "/docs", "/openapi.json", "/v1/admin/rotate-key", "/v1/train", "/v1/model-info"]:
             return await call_next(request)
             
         key_hash_prefix = getattr(request.state, "api_key_hash_prefix", None)

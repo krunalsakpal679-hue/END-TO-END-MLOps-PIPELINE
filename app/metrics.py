@@ -30,6 +30,11 @@ feedback_received_total = Counter(
     ["ground_truth"]
 )
 
+feedback_accuracy_percentage = Gauge(
+    "feedback_accuracy_percentage",
+    "Rolling accuracy percentage calculated from user feedback mappings"
+)
+
 drift_psi_score = Gauge(
     "drift_psi_score",
     "Stores the latest PSI drift score per feature",

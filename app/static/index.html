@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus AI | Unified Intelligence Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&family=Space+Grotesk:wght@300;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-wrapper">
+        <header>
+            <div class="logo">NEXUS AI</div>
+            <div class="system-status" id="sys-status" title="Checking health...">
+                <span class="status-dot"></span> <span id="sys-status-text">Connecting...</span>
+            </div>
+            <nav class="nav-tabs" role="tablist">
+                <div class="nav-tab active" onclick="showPanel('training')" role="tab">Model Factory</div>
+                <div class="nav-tab" onclick="showPanel('inference')" role="tab">Predictive Engine</div>
+                <div class="nav-tab" onclick="showPanel('admin')" role="tab">Admin Settings</div>
+            </nav>
+            <div class="status-pill" id="security-btn" onclick="toggleSecurity()">SECURITY SECURED</div>
+        </header>
+
+        <!-- Security Modal (To prevent browser password save popups) -->
+        <div id="security-modal" class="modal-overlay hidden">
+            <div class="card security-card">
+                <h2>Security Vault</h2>
+                <div class="field">
+                    <label for="auth-key">API Access Token</label>
+                    <input type="password" id="auth-key" value="my-secret-key" autocomplete="new-password" placeholder="Enter Token" title="Access Token">
+                </div>
+                <button class="btn-action" onclick="toggleSecurity()">Close & Save</button>
+            </div>
+        </div>
+
+        <!-- TRAINING PANEL -->
+        <main id="training-panel" class="panel active">
+            <section class="card">
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8"/><path d="m4.93 4.93 5.66 5.66"/><path d="M2 12h8"/><path d="m4.93 19.07 5.66-5.66"/><path d="M12 22v-8"/><path d="m19.07 19.07-5.66-5.66"/><path d="M22 12h-8"/><path d="m19.07 4.93-5.66 5.66"/></svg> Step 1: Model Factory</h2>
+                <div class="drop-zone" onclick="document.getElementById('file-in').click()">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p id="file-status" class="fw-700">Select Dataset (CSV)</p>
+                    <p class="muted-text mt-2">Labels will update automatically based on your columns</p>
+                    <input type="file" id="file-in" hidden onchange="onFileSelected(this)" title="CSV Upload">
+                </div>
+                <div class="field">
+                    <label for="algo-select">Algorithm Selection</label>
+                    <select id="algo-select" title="Algorithm">
+                        <option value="gradient_boosting">Gradient Boosting</option>
+                        <option value="random_forest">Random Forest</option>
+                        <option value="logistic_regression">Logistic Regression</option>
+                    </select>
+                </div>
+                <button type="button" class="btn-action" onclick="runTraining()">
+                    <span id="t-btn-text">Train Platform</span>
+                    <div id="t-btn-loader" class="loader"></div>
+                </button>
+            </section>
+
+            <section class="card">
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Training Analytics</h2>
+                <div class="metrics-hero">
+                    <div class="metric-box">
+                        <h3>Accuracy</h3>
+                        <p id="t-acc" class="success-text">0.0%</p>
+                    </div>
+                    <div class="metric-box">
+                        <h3>F1-Score</h3>
+                        <p id="t-f1" class="primary-text">0.0%</p>
+                    </div>
+                </div>
+                <div id="t-success" class="hidden text-center mt-8 card success-banner">
+                    <p class="success-text fw-700">MODEL DEPLOYED</p>
+                    <p class="mt-2">Predictive Engine labels have been synchronized.</p>
+                    <button class="btn-action mt-4" onclick="showPanel('inference')">Test Real Data →</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- INFERENCE PANEL -->
+        <main id="inference-panel" class="panel">
+            <section class="card">
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> Step 2: Prediction</h2>
+                
+                <div class="model-context-bar">
+                    <div><span class="context-tag">Source:</span> <span id="ctx-file">Default</span></div>
+                    <div><span class="context-tag">Algo:</span> <span id="ctx-algo">...</span></div>
+                </div>
+
+                <form id="inference-form" autocomplete="off">
+                    <div class="input-grid" id="feature-inputs"></div>
+                    <button type="submit" class="btn-action mt-8">
+                        <span id="btn-text">Generate Prediction</span>
+                        <div id="btn-loader" class="loader"></div>
+                    </button>
+                </form>
+            </section>
+
+            <section class="card">
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Predictive Insights</h2>
+                <div class="metrics-hero">
+                    <div class="metric-box">
+                        <h3>Class</h3>
+                        <p id="pred-out">—</p>
+                    </div>
+                    <div class="metric-box">
+                        <h3>Confidence</h3>
+                        <p id="conf-out">—</p>
+                    </div>
+                </div>
+                <div class="charts-grid mt-4">
+                    <div class="chart-wrapper">
+                        <canvas id="confidenceChart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="historyChart"></canvas>
+                    </div>
+                </div>
+                
+                <div id="feedback-section" class="hidden mt-8 card feedback-banner">
+                    <h3 class="mb-2 text-base">Was this prediction correct?</h3>
+                    <p class="muted-text mb-4 text-sm">Help improve the model by providing ground truth feedback.</p>
+                    <div class="action-buttons">
+                        <button type="button" class="btn-action btn-success-small" onclick="submitFeedback(true)">Yes, Correct</button>
+                        <button type="button" class="btn-action btn-danger-small" onclick="submitFeedback(false)">No, Incorrect</button>
+                    </div>
+                    <div id="feedback-success" class="hidden mt-4 success-text text-center fw-700 text-sm">Feedback saved. Thank you!</div>
+                </div>
+
+                <div class="audit-list">
+                    <div class="audit-item"><span class="muted-text">Model Version</span> <span id="v-out" class="fw-700">6</span></div>
+                    <div class="audit-item"><span class="muted-text">Latency</span> <span id="lat-out" class="fw-700">0.0ms</span></div>
+                </div>
+            </section>
+        </main>
+
+        <!-- ADMIN PANEL -->
+        <main id="admin-panel" class="panel">
+            <section class="card col-span-2">
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Admin Settings</h2>
+                <p class="muted-text mb-4">Rotate API Keys for secure access. You must provide the current Admin Key to authorize this action.</p>
+                <div class="field mt-4">
+                    <label for="current-admin-key">Current Admin Key</label>
+                    <input type="password" id="current-admin-key" placeholder="Enter Admin Key" autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <label for="new-api-key">New API Key (to authorize)</label>
+                    <input type="text" id="new-api-key" placeholder="Enter New API Key">
+                </div>
+                <button type="button" class="btn-action mt-4" onclick="rotateKey()">
+                    <span id="rotate-btn-text">Authorize & Rotate Key</span>
+                    <div id="rotate-btn-loader" class="loader"></div>
+                </button>
+                <div id="rotate-success" class="hidden mt-4 success-text fw-700 text-center">Key Rotated Successfully!</div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        let currentModelMetadata = null;
+        let currentPredictionId = null;
+        let currentPredictedClass = null;
+        let predictionHistory = { labels: [], data: [] };
+
+        async function fetchHealth() {
+            try {
+                const res = await fetch('/v1/health');
+                const data = await res.json();
+                const dot = document.querySelector('.status-dot');
+                const text = document.getElementById('sys-status-text');
+                
+                dot.className = 'status-dot'; // reset
+                if (data.status === 'healthy') {
+                    dot.classList.add('healthy');
+                    text.textContent = 'System Healthy';
+                } else {
+                    dot.classList.add('degraded');
+                    text.textContent = 'Degraded';
+                }
+            } catch (e) {
+                if(document.querySelector('.status-dot')) {
+                    document.querySelector('.status-dot').className = 'status-dot degraded';
+                    document.getElementById('sys-status-text').textContent = 'Disconnected';
+                }
+            }
+        }
+        setInterval(fetchHealth, 10000);
+        fetchHealth();
+
+        async function rotateKey() {
+            const adminKey = document.getElementById('current-admin-key').value;
+            const newKey = document.getElementById('new-api-key').value;
+            if (!adminKey || !newKey) { alert('Fill both fields'); return; }
+
+            const loader = document.getElementById('rotate-btn-loader');
+            const txt = document.getElementById('rotate-btn-text');
+            txt.style.display = 'none'; loader.style.display = 'block';
+
+            try {
+                const msgBuffer = new TextEncoder().encode(newKey);                    
+                const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashedKey = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+                const res = await fetch('/v1/admin/rotate-key', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Admin-Key': adminKey
+                    },
+                    body: JSON.stringify({ new_key_hash: hashedKey })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Rotation Failed');
+                
+                document.getElementById('rotate-success').classList.remove('hidden');
+                document.getElementById('auth-key').value = newKey;
+                setTimeout(() => document.getElementById('rotate-success').classList.add('hidden'), 3000);
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+            txt.style.display = 'block'; loader.style.display = 'none';
+        }
+
+        async function submitFeedback(isCorrect) {
+            if (!currentPredictionId) return;
+            const groundTruth = isCorrect ? currentPredictedClass : (currentPredictedClass === 1 ? 0 : 1);
+            
+            try {
+                await fetch('/v1/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prediction_id: currentPredictionId,
+                        ground_truth: groundTruth
+                    })
+                });
+                document.getElementById('feedback-success').classList.remove('hidden');
+                setTimeout(() => document.getElementById('feedback-section').classList.add('hidden'), 2000);
+            } catch (e) {
+                console.error('Feedback error', e);
+            }
+        }
+
+        function toggleSecurity() {
+            document.getElementById('security-modal').classList.toggle('hidden');
+        }
+
+        function showPanel(id) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(id + '-panel').classList.add('active');
+            
+            document.querySelectorAll('.nav-tab').forEach(t => {
+                if (id === 'training' && t.textContent.includes('Factory')) t.classList.add('active');
+                if (id === 'inference' && t.textContent.includes('Predictive')) t.classList.add('active');
+                if (id === 'admin' && t.textContent.includes('Admin')) t.classList.add('active');
+            });
+            
+            if (id === 'inference') updateModelInfo();
+        }
+
+        async function updateModelInfo() {
+            try {
+                const res = await fetch('/v1/model-info');
+                const data = await res.json();
+                currentModelMetadata = data;
+                document.getElementById('ctx-file').textContent = data.source_file;
+                document.getElementById('ctx-algo').textContent = data.algorithm;
+                renderInputs(data.feature_names);
+            } catch (err) { console.error('Metadata Fetch Error'); }
+        }
+
+        function renderInputs(names) {
+            const grid = document.getElementById('feature-inputs');
+            let html = '';
+            
+            // Limit rendered inputs to prevent browser hang for huge datasets (like NLP one-hot encoded text)
+            const MAX_INPUTS = 50;
+            const displayNames = names.slice(0, MAX_INPUTS);
+            
+            displayNames.forEach((name, i) => {
+                html += `<div class="field"><label for="f${i}">${name}</label><input type="number" step="0.01" id="f${i}" value="0.00" autocomplete="off" title="${name}"></div>`;
+            });
+            
+            if (names.length > MAX_INPUTS) {
+                html += `<div class="field-full" style="color: var(--warning); background: rgba(245, 158, 11, 0.1); padding: 1rem; border: 1px dashed var(--warning); border-radius: 0.5rem; text-align: center;"><small>Dataset generated ${names.length} columns! Rendering capped at ${MAX_INPUTS} to maintain performance. Remaining features are auto-padded with 0.0.</small></div>`;
+            }
+            grid.innerHTML = html;
+        }
+
+        const confCtx = document.getElementById('confidenceChart').getContext('2d');
+        const confChart = new Chart(confCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Confidence', 'Uncertainty'],
+                datasets: [{
+                    data: [0, 1],
+                    backgroundColor: ['#8b5cf6', 'rgba(255,255,255,0.05)'],
+                    borderWidth: 0,
+                    cutout: '75%'
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, title: { display: true, text: 'Model Confidence', color: '#9ca3af' } }
+            }
+        });
+
+        const histCtx = document.getElementById('historyChart').getContext('2d');
+        const histChart = new Chart(histCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Probability',
+                    data: [],
+                    backgroundColor: '#06b6d4',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true, max: 1, display: false }, x: { grid: { display: false }, ticks: { color: '#6b7280', font: {size: 9} } } },
+                plugins: { legend: { display: false }, title: { display: true, text: 'Recent Predictions', color: '#9ca3af' } }
+            }
+        });
+
+        document.getElementById('inference-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const loader = document.getElementById('btn-loader');
+            const txt = document.getElementById('btn-text');
+            txt.style.display = 'none'; loader.style.display = 'block';
+
+            const features = [];
+            document.querySelectorAll('#feature-inputs input').forEach(input => features.push(parseFloat(input.value)));
+
+            try {
+                const res = await fetch('/v1/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': document.getElementById('auth-key').value },
+                    body: JSON.stringify({ features: features }) 
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Access Denied');
+
+                document.getElementById('pred-out').textContent = 'CLASS ' + data.prediction;
+                document.getElementById('conf-out').textContent = (data.probability * 100).toFixed(1) + '%';
+                document.getElementById('v-out').textContent = data.model_version;
+                document.getElementById('lat-out').textContent = data.latency_ms.toFixed(1) + 'ms';
+                
+                // Set context for feedback
+                currentPredictionId = data.request_id;
+                currentPredictedClass = data.prediction;
+                document.getElementById('feedback-section').classList.remove('hidden');
+                document.getElementById('feedback-success').classList.add('hidden');
+
+                // Update charts
+                confChart.data.datasets[0].data = [data.probability, 1 - data.probability];
+                confChart.update();
+
+                predictionHistory.labels.push(new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}));
+                predictionHistory.data.push(data.probability);
+                if (predictionHistory.labels.length > 5) {
+                    predictionHistory.labels.shift();
+                    predictionHistory.data.shift();
+                }
+                histChart.data.labels = predictionHistory.labels;
+                histChart.data.datasets[0].data = predictionHistory.data;
+                histChart.update();
+            } catch (err) { alert('Error: ' + err.message); }
+            txt.style.display = 'block'; loader.style.display = 'none';
+        });
+
+        function onFileSelected(input) {
+            document.getElementById('file-status').textContent = input.files[0] ? input.files[0].name : 'Select Dataset (CSV)';
+        }
+
+        async function runTraining() {
+            const file = document.getElementById('file-in').files[0];
+            if (!file) { alert('Upload CSV First'); return; }
+
+            const loader = document.getElementById('t-btn-loader');
+            const txt = document.getElementById('t-btn-text');
+            txt.style.display = 'none'; loader.style.display = 'block';
+
+            const fd = new FormData();
+            fd.append('file', file);
+            const algo = document.getElementById('algo-select').value;
+
+            try {
+                const res = await fetch(`/v1/train?algorithm=${algo}`, { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                document.getElementById('t-acc').textContent = (data.metrics.accuracy * 100).toFixed(1) + '%';
+                document.getElementById('t-f1').textContent = (data.metrics.f1_score * 100).toFixed(1) + '%';
+                document.getElementById('t-success').classList.remove('hidden');
+                updateModelInfo();
+            } catch (err) { alert('Training Failed: ' + err.message); }
+            txt.style.display = 'block'; loader.style.display = 'none';
+        }
+
+        updateModelInfo();
+    </script>
+</body>
+</html>

@@ -9,10 +9,11 @@ def test_valid_prediction_request():
     assert req.request_id is not None
 
 def test_wrong_feature_count():
-    with pytest.raises(ValidationError):
-        PredictionRequest(features=[0.0] * 9)
-    with pytest.raises(ValidationError):
-        PredictionRequest(features=[0.0] * 11)
+    # Dynamic feature list sizes are now supported
+    req_short = PredictionRequest(features=[0.0] * 9)
+    req_long = PredictionRequest(features=[0.0] * 11)
+    assert len(req_short.features) == 9
+    assert len(req_long.features) == 11
 
 def test_nan_value_rejected():
     with pytest.raises(ValidationError):

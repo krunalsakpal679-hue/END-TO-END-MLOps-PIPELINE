@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 env:
   REGISTRY: ghcr.io
@@ -92,27 +92,27 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ needs.build_and_push.outputs.image_tag }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-          vuln-type: 'os,library'
+          vuln-type: "os,library"
           trivyignores: .trivyignore
 
       - name: Upload Trivy SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: "trivy-results.sarif"
 
       - name: Fail on fixable CRITICAL vulnerabilities
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ needs.build_and_push.outputs.image_tag }}
-          format: 'table'
-          severity: 'CRITICAL'
-          exit-code: '1'
+          format: "table"
+          severity: "CRITICAL"
+          exit-code: "1"
           ignore-unfixed: true
-          vuln-type: 'os,library'
+          vuln-type: "os,library"
           trivyignores: .trivyignore
 
   # ──────────────────────────────────────────────
