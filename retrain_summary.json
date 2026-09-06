@@ -1,8 +1,8 @@
 {
-    "trigger_reason": "automated_qa_test",
-    "timestamp": "2026-05-31T11:49:53.970364+00:00",
-    "champion_f1": 0.5397235780365963,
-    "challenger_f1": 0.6712213096085233,
+    "trigger_reason": "scheduled_weekly",
+    "timestamp": "2026-09-06T07:01:37.431930+00:00",
+    "champion_f1": 0.5197537728926529,
+    "challenger_f1": 0.6716994146502163,
     "promoted": true,
     "reason_for_decision": "Challenger exceeded Champion F1 by > 0.01 threshold."
 }
